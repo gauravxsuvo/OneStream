@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Plain CommonJS entry point run directly by Node, not part of the Next.js app.
+    "server.js",
   ]),
 ]);
 

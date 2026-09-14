@@ -1,0 +1,60 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+
+export function EnterForm() {
+  const [passcode, setPasscode] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+  const params = useSearchParams();
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/enter", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passcode }),
+      });
+      if (res.ok) {
+        const dest = params.get("next") || "/";
+        router.replace(dest);
+        router.refresh();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Wrong passcode");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <main className="mx-auto flex min-h-[70dvh] max-w-sm flex-col justify-center gap-6 px-6">
+      <div className="text-center">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          One<span className="text-accent">Stream</span>
+        </h1>
+        <p className="mt-1 text-sm text-muted">Enter the passcode to join.</p>
+      </div>
+      <form onSubmit={onSubmit} className="flex flex-col gap-3">
+        <input
+          type="password"
+          autoFocus
+          value={passcode}
+          onChange={(e) => setPasscode(e.target.value)}
+          placeholder="Passcode"
+          className="input"
+        />
+        {error && <p className="text-sm text-danger">{error}</p>}
+        <button type="submit" disabled={loading || !passcode} className="btn-primary">
+          {loading ? "Checking…" : "Enter"}
+        </button>
+      </form>
+    </main>
+  );
+}

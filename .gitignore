@@ -24,6 +24,9 @@
 .DS_Store
 *.pem
 
+# local media uploads (not durable storage — see README)
+/data
+
 # debug
 npm-debug.log*
 yarn-debug.log*

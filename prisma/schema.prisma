@@ -1,0 +1,57 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MediaType {
+  AUDIO
+  VIDEO
+}
+
+enum StorageKind {
+  LOCAL
+  S3
+}
+
+model Media {
+  id          String      @id @default(cuid())
+  title       String
+  type        MediaType
+  storageKey  String
+  storageKind StorageKind @default(LOCAL)
+  mimeType    String
+  size        Int
+  uploadedBy  String
+  createdAt   DateTime    @default(now())
+  rooms       Room[]
+}
+
+model Room {
+  id             String    @id @default(cuid())
+  code           String    @unique
+  name           String
+  currentMediaId String?
+  currentMedia   Media?    @relation(fields: [currentMediaId], references: [id], onDelete: SetNull)
+  isPlaying      Boolean   @default(false)
+  positionSec    Float     @default(0)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  messages       ChatMessage[]
+
+  @@index([code])
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sender    String
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([roomId, createdAt])
+}
