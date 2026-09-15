@@ -9,8 +9,8 @@ export async function sha256Hex(input: string): Promise<string> {
 }
 
 /** Checks the passcode cookie directly, for routes that opt out of the
- * middleware/proxy gate (see src/app/api/upload/route.ts). Mirrors the check
- * middleware.ts does inline. */
+ * proxy gate (see the api/upload/init, /chunk and /complete routes). Mirrors
+ * the check proxy.ts does inline. */
 export async function isAuthenticated(cookieValue: string | undefined): Promise<boolean> {
   const passcode = process.env.ONESTREAM_PASSCODE;
   if (!passcode) return true;

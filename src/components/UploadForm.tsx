@@ -4,6 +4,46 @@ import { useRef, useState } from "react";
 import { useDisplayName } from "@/lib/useDisplayName";
 import type { MediaItem } from "@/lib/types";
 
+// Kept well under the platform's ~100MB per-request proxy ceiling (Portways
+// sits behind Cloudflare, which hard-caps any single request body there) --
+// a whole file used to go up as one request and any video over that size
+// failed outright. Chunking splits it into many small requests instead, none
+// of which get anywhere near the limit.
+const CHUNK_SIZE = 32 * 1024 * 1024;
+const CHUNK_RETRIES = 2;
+
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  return data as T;
+}
+
+async function sendChunk(uploadId: string, chunk: Blob) {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= CHUNK_RETRIES; attempt++) {
+    try {
+      const res = await fetch("/api/upload/chunk", {
+        method: "POST",
+        headers: { "x-upload-id": uploadId, "content-type": "application/octet-stream" },
+        body: chunk,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error || `Chunk failed (${res.status})`);
+      }
+      return;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Chunk failed");
+}
+
 export function UploadForm({ onUploaded }: { onUploaded: (media: MediaItem) => void }) {
   const { name } = useDisplayName();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -19,7 +59,7 @@ export function UploadForm({ onUploaded }: { onUploaded: (media: MediaItem) => v
     if (!title) setTitle(file.name.replace(/\.[^/.]+$/, ""));
   }
 
-  function upload(e: React.FormEvent) {
+  async function upload(e: React.FormEvent) {
     e.preventDefault();
     const file = pendingFile ?? fileRef.current?.files?.[0];
     if (!file) return;
@@ -27,37 +67,33 @@ export function UploadForm({ onUploaded }: { onUploaded: (media: MediaItem) => v
     setError("");
     setProgress(0);
 
-    const form = new FormData();
-    form.append("title", title || file.name);
-    form.append("uploadedBy", name || "Someone");
-    form.append("file", file);
+    try {
+      const { uploadId } = await postJson<{ uploadId: string }>("/api/upload/init", {});
 
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/upload");
-    xhr.upload.onprogress = (evt) => {
-      if (evt.lengthComputable) setProgress(Math.round((evt.loaded / evt.total) * 100));
-    };
-    xhr.onload = () => {
-      setProgress(null);
-      if (xhr.status >= 200 && xhr.status < 300) {
-        const media = JSON.parse(xhr.responseText) as MediaItem;
-        onUploaded(media);
-        setTitle("");
-        setPendingFile(null);
-        if (fileRef.current) fileRef.current.value = "";
-      } else {
-        try {
-          setError(JSON.parse(xhr.responseText).error || "Upload failed");
-        } catch {
-          setError("Upload failed");
-        }
+      const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+      for (let i = 0; i < totalChunks; i++) {
+        const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+        await sendChunk(uploadId, chunk);
+        setProgress(Math.round(((i + 1) / totalChunks) * 100));
       }
-    };
-    xhr.onerror = () => {
+
+      const media = await postJson<MediaItem>("/api/upload/complete", {
+        uploadId,
+        title: title || file.name,
+        uploadedBy: name || "Someone",
+        mimeType: file.type || "application/octet-stream",
+        originalName: file.name,
+      });
+
+      onUploaded(media);
+      setTitle("");
+      setPendingFile(null);
+      if (fileRef.current) fileRef.current.value = "";
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
       setProgress(null);
-      setError("Upload failed");
-    };
-    xhr.send(form);
+    }
   }
 
   return (
