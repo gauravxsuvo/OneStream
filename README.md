@@ -51,8 +51,14 @@ src/lib/storage.ts           local-disk / S3 upload + streaming abstraction
 ## Deploying on Portways
 
 This repo is a plain Node/`package.json` project, so Portways builds it with no extra
-configuration: `npm install` → `npm run build` (runs `next build`) → `npm start` (applies the
-Prisma schema, then starts `server.js`, which listens on `process.env.PORT` as required).
+configuration: `npm install` → `npm run build` (generates the Prisma client, then runs
+`next build`) → `npm start` (applies the Prisma schema, then starts `server.js`, which listens on
+`process.env.PORT` as required).
+
+`prisma generate` deliberately lives in the `build` script, not `postinstall` — Portways' Node
+build copies `package*.json` and runs `npm install` *before* copying the rest of the source, so a
+`postinstall` hook that needs `prisma/schema.prisma` fails with "schema not found." Running it as
+the first half of `build` avoids that, since the full source is present by then.
 
 Steps:
 
