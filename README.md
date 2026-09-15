@@ -62,6 +62,14 @@ configuration: `npm install`, then `npm run build` (generates the Prisma client,
 `next build`), then `npm start` (applies the Prisma schema, then starts `server.js`, which
 listens on `process.env.PORT` as required).
 
+`npm start` forces `NODE_ENV=production` itself (via `cross-env`, so it works the same on any
+host) before starting `server.js`. That matters because `server.js` decides whether to serve the
+already-built production output or boot Next's dev server off of `process.env.NODE_ENV`, and
+Portways' auto-generated Dockerfile never sets it. Without this, the container would run in dev
+mode, try to live-install missing dev tooling into a node_modules the build already pruned, and
+the page would come back unstyled, which looks like a blank white screen for a dark-themed app.
+You don't need to set `NODE_ENV` yourself anywhere, `npm start` already handles it.
+
 `prisma generate` deliberately lives in the `build` script, not `postinstall`. Portways' Node
 build copies `package*.json` and runs `npm install` before copying the rest of the source, so a
 `postinstall` hook that needs `prisma/schema.prisma` fails with "schema not found." Running it as
