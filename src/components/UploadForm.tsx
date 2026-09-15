@@ -8,12 +8,20 @@ export function UploadForm({ onUploaded }: { onUploaded: (media: MediaItem) => v
   const { name } = useDisplayName();
   const fileRef = useRef<HTMLInputElement>(null);
   const [title, setTitle] = useState("");
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+
+  function pickFile(file: File | undefined | null) {
+    if (!file) return;
+    setPendingFile(file);
+    if (!title) setTitle(file.name.replace(/\.[^/.]+$/, ""));
+  }
 
   function upload(e: React.FormEvent) {
     e.preventDefault();
-    const file = fileRef.current?.files?.[0];
+    const file = pendingFile ?? fileRef.current?.files?.[0];
     if (!file) return;
 
     setError("");
@@ -35,6 +43,7 @@ export function UploadForm({ onUploaded }: { onUploaded: (media: MediaItem) => v
         const media = JSON.parse(xhr.responseText) as MediaItem;
         onUploaded(media);
         setTitle("");
+        setPendingFile(null);
         if (fileRef.current) fileRef.current.value = "";
       } else {
         try {
@@ -52,28 +61,54 @@ export function UploadForm({ onUploaded }: { onUploaded: (media: MediaItem) => v
   }
 
   return (
-    <form onSubmit={upload} className="card flex flex-col gap-3 p-5">
+    <form onSubmit={upload} className="card flex flex-col gap-3 p-4 sm:p-5">
       <h2 className="text-sm font-medium">Upload music or a video</h2>
+
+      <div
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          pickFile(e.dataTransfer.files?.[0]);
+        }}
+        onClick={() => fileRef.current?.click()}
+        className={`flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border-2 border-dashed px-4 py-6 text-center transition ${
+          dragOver ? "border-accent bg-accent/5" : "border-border hover:border-white/20"
+        }`}
+      >
+        <span className="text-xl">{pendingFile ? "✅" : "📁"}</span>
+        <p className="text-sm text-foreground">
+          {pendingFile ? pendingFile.name : "Drag a file here, or click to browse"}
+        </p>
+        <p className="text-xs text-muted">Audio or video · up to 20GB</p>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="audio/*,video/*"
+          required
+          onChange={(e) => pickFile(e.target.files?.[0])}
+          className="hidden"
+        />
+      </div>
+
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Title (optional)"
         className="input"
       />
-      <input
-        ref={fileRef}
-        type="file"
-        accept="audio/*,video/*"
-        required
-        className="text-sm text-muted file:mr-3 file:rounded-lg file:border-0 file:bg-surface-hover file:px-3 file:py-2 file:text-sm file:text-foreground"
-      />
+
       {progress !== null && (
         <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-hover">
           <div className="h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
         </div>
       )}
       {error && <p className="text-sm text-danger">{error}</p>}
-      <button type="submit" disabled={progress !== null} className="btn-primary">
+      <button type="submit" disabled={progress !== null || !pendingFile} className="btn-primary">
         {progress !== null ? `Uploading… ${progress}%` : "Upload"}
       </button>
     </form>

@@ -65,3 +65,36 @@ body {
   background: var(--border);
   border-radius: 999px;
 }
+
+/* Volume slider inside the player control bar — native range, restyled to a
+   thin accent-colored track so it matches the custom seek bar next to it. */
+.volume-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+  outline: none;
+}
+.volume-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--accent);
+  cursor: pointer;
+}
+.volume-range::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  cursor: pointer;
+}
+.volume-range::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+}
