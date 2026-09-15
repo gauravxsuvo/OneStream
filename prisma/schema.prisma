@@ -90,3 +90,20 @@ model ChatMessage {
 
   @@index([roomId, createdAt])
 }
+
+/// One row per (anonymous viewer, calendar day, media type) -- accumulates actual
+/// playing seconds reported by the player's heartbeat. `lastSeenAt` doubles as the
+/// "is this viewer actively streaming right now" signal for the concurrent-stream
+/// cap, so a second table isn't needed just for that.
+model UsageHeartbeat {
+  id          String    @id @default(cuid())
+  viewerId    String
+  date        String // "YYYY-MM-DD", server clock -- see usageLimits.ts
+  mediaType   MediaType
+  secondsUsed Int       @default(0)
+  lastSeenAt  DateTime  @updatedAt
+
+  @@unique([viewerId, date, mediaType])
+  @@index([date, mediaType])
+  @@index([lastSeenAt])
+}

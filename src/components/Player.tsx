@@ -11,6 +11,7 @@ import {
 import { formatDuration } from "@/lib/format";
 import { playerPrefs } from "@/lib/playerPrefs";
 import { AUDIO_LADDER, VIDEO_LADDER } from "@/lib/qualityLadder";
+import { useUsageQuota } from "@/lib/useUsageQuota";
 import type { MediaItem, RenditionInfo } from "@/lib/types";
 import { StatsOverlay } from "@/components/StatsOverlay";
 import {
@@ -102,6 +103,16 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
   const [statsOpen, setStatsOpen] = useState(false);
   const [dragRatio, setDragRatio] = useState<number | null>(null);
 
+  const quota = useUsageQuota(media?.type ?? null, playing);
+
+  useEffect(() => {
+    if (quota.blocked) mediaRef.current?.pause();
+  }, [quota.blocked]);
+
+  function canPlay(): boolean {
+    return !quota.isBlocked();
+  }
+
   useEffect(() => {
     initialRef.current = initial;
   }, [initial]);
@@ -156,7 +167,7 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
   useImperativeHandle(ref, () => ({
     applyPlay(positionSec, at) {
       const el = mediaRef.current;
-      if (!el) return;
+      if (!el || !canPlay()) return;
       withSuppressed(() => {
         const elapsed = (Date.now() - at) / 1000;
         el.currentTime = Math.max(0, positionSec + elapsed);
@@ -206,14 +217,18 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
         const init = initialRef.current;
         const elapsed = init.isPlaying ? (Date.now() - new Date(init.updatedAt).getTime()) / 1000 : 0;
         el.currentTime = Math.max(0, init.positionSec + elapsed);
-        if (init.isPlaying) el.play().catch(() => {});
+        if (init.isPlaying && canPlay()) el.play().catch(() => {});
       } else {
         if (preserveTime != null) el.currentTime = preserveTime;
-        if (wasPlaying) el.play().catch(() => {});
+        if (wasPlaying && canPlay()) el.play().catch(() => {});
       }
     };
     el.addEventListener("loadedmetadata", onLoaded, { once: true });
     return () => el.removeEventListener("loadedmetadata", onLoaded);
+    // canPlay() reads a ref (useUsageQuota's blockedRef), so it's always
+    // current regardless of which render's closure this effect captured --
+    // adding it here would only churn the effect on every render instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [media, effectiveLabel]);
 
   useEffect(() => {
@@ -264,8 +279,11 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
   function togglePlay() {
     const el = mediaRef.current;
     if (!el) return;
-    if (el.paused) el.play().catch(() => {});
-    else el.pause();
+    if (el.paused) {
+      if (canPlay()) el.play().catch(() => {});
+    } else {
+      el.pause();
+    }
   }
 
   function seekBy(deltaSec: number) {
@@ -452,9 +470,16 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
         </div>
       )}
 
-      {buffering && (
+      {buffering && !quota.blocked && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <SpinnerIcon className="h-10 w-10 animate-spin text-white/80" />
+        </div>
+      )}
+
+      {quota.blocked && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/80 px-6 text-center">
+          <span className="text-2xl">⏳</span>
+          <p className="text-sm text-white">{quota.reason}</p>
         </div>
       )}
       </div>
@@ -516,6 +541,11 @@ export const Player = forwardRef<PlayerHandle, Props>(function Player(
           <span className="font-mono text-[11px] tabular-nums text-white/80 sm:text-xs">
             {formatDuration(displayTime)} / {formatDuration(duration || media.durationSec)}
           </span>
+          {Number.isFinite(quota.remainingSeconds) && !quota.blocked && (
+            <span className="hidden text-[11px] text-white/50 sm:inline">
+              · {formatDuration(quota.remainingSeconds)} left today
+            </span>
+          )}
 
           <div className="ml-auto flex items-center gap-1">
             <div className="relative">

@@ -118,6 +118,22 @@ single-container mode. (If you outgrow that, the fix is the Socket.IO Redis adap
 room and queue state out of `server.js`'s in-memory `Map`s, not implemented here, in the interest
 of staying lightweight.)
 
+### Daily streaming caps
+
+Portways is fully behind Cloudflare, and Cloudflare's terms of service prohibit streaming video
+through their standard CDN regardless of volume -- there's no bandwidth bill, but sustained heavy
+streaming risks them throttling the hostname. To bound that exposure, playback is capped per
+anonymous browser (an `onestream_viewer` cookie, no account needed) at 3 hours of video and 6
+hours of audio a day by default, plus a shared daily pool across everyone (12h video / 24h audio)
+and a simultaneous-stream cap (4 video / 8 audio) so one movie night can't spike bandwidth all at
+once. All six numbers are env vars (`DAILY_VIDEO_HOURS`, `DAILY_AUDIO_HOURS`,
+`DAILY_VIDEO_HOURS_GLOBAL`, `DAILY_AUDIO_HOURS_GLOBAL`, `CONCURRENT_VIDEO_LIMIT`,
+`CONCURRENT_AUDIO_LIMIT` -- see `.env.example`). The player pauses itself and shows the reason once
+a cap is hit; `/api/media/[id]` enforces the same check server-side regardless of whether the
+player's own logic ran, so a stale tab or a direct reload can't bypass it. Clearing cookies resets
+an individual's own counter -- an accepted gap for a friends-only soft cap, not something worth
+fighting harder for.
+
 ## Notes and intentional simplifications
 
 - No user accounts. A shared passcode plus a per-browser display name (stored in `localStorage`)
