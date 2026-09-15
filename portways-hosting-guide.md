@@ -226,6 +226,66 @@ the same "Require status checks to pass before merging" option with the same che
 - A linked database injects `DATABASE_URL` (Postgres) or `REDIS_URL` (Redis) automatically. A variable set manually under the same name always wins over the injected one.
 - Saving env vars does not restart the running container by itself — a new deploy or an explicit `Restart` is what applies them.
 
+## Object storage (S3-compatible) add-on
+
+Portways can run a self-hosted, S3-compatible object storage server (MinIO) as a database-style
+add-on — for images, videos, or any file too large or too binary to belong in Postgres. Create one
+from the Databases tab like a Postgres/Redis add-on (type "Object Storage (S3)"), then link a
+project to it. Linking provisions that project its own bucket plus credentials scoped to *only*
+that bucket — never the add-on's own admin user — and injects six environment variables (default
+prefix `S3_`, choosable per link):
+
+```
+S3_ENDPOINT=https://<addon-name>-storage.portways.app
+S3_REGION=auto
+S3_BUCKET=<bucket>
+S3_ACCESS_KEY_ID=...
+S3_SECRET_ACCESS_KEY=...
+S3_FORCE_PATH_STYLE=true
+```
+
+Point any standard S3 SDK at these — for example, the AWS SDK v3:
+
+```js
+import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+
+const s3 = new S3Client({
+  endpoint: process.env.S3_ENDPOINT,
+  region: process.env.S3_REGION,
+  forcePathStyle: process.env.S3_FORCE_PATH_STYLE === "true",
+  credentials: { accessKeyId: process.env.S3_ACCESS_KEY_ID, secretAccessKey: process.env.S3_SECRET_ACCESS_KEY },
+});
+
+// A presigned URL the browser can PUT/GET directly, without routing the
+// file's bytes through your own app server.
+const url = await getSignedUrl(s3, new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: "video.mp4" }), {
+  expiresIn: 900,
+});
+```
+
+Notes specific to this add-on:
+
+- `S3_ENDPOINT`/`S3_REGION`/`S3_BUCKET`/`S3_FORCE_PATH_STYLE` carry no secret and can be given a
+  build-time-public prefix (`VITE_S3_BUCKET`, say) if your frontend needs to construct URLs
+  client-side. `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` cannot — linking refuses a prefix shaped
+  like one of those conventions for the two credential keys specifically.
+- CORS is one setting for the whole add-on (every bucket on it), not configurable per bucket —
+  Portways keeps it in sync automatically with every linked project's hostname(s), so a
+  direct-from-browser presigned upload/download works with no CORS configuration of your own.
+- Video seeking depends on HTTP Range requests, which the S3 API and this add-on both support —
+  if a `<video>` tag can't seek, check that nothing in front of your player is stripping
+  `Range`/`Accept-Ranges` headers, not the add-on itself.
+- Unlinking a project revokes its credentials but never deletes the bucket's contents. Deleting
+  the add-on itself (from its card) removes everything, including every bucket's data.
+- **Preview deployments**: turning on "Give each preview its own scoped prefix" on a link means
+  every preview gets credentials scoped to `preview/<slug>/` inside that same bucket, plus an
+  extra `${prefix}PREFIX` env var (e.g. `S3_PREFIX=preview/pr-42/`) telling it where. Unlike a
+  linked database, this is **not transparent** to your app -- `S3_BUCKET` is unchanged, but the
+  preview's credentials can only read/write/list under that prefix, so your app has to actually
+  build every key as `${S3_PREFIX}${key}` in preview builds. Objects under a preview's prefix are
+  deleted when the preview is torn down.
+
 ## Designing a project that autoscales
 
 Autoscaling is opt-in per project, and switching a project to `scaled` mode asks you to confirm

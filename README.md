@@ -12,8 +12,8 @@ plus a lightweight chat.
 - **Prisma + PostgreSQL** stores media metadata, rooms, and chat history.
 - **One shared passcode** (`ONESTREAM_PASSCODE`) gates the whole app — there are no user
   accounts. Everyone who has the passcode picks a display name and shares the library and rooms.
-- Uploads stream straight to disk (or S3, if configured) without ever buffering the whole file
-  in memory, so movie-sized files work fine on a small container.
+- Uploads stream straight to disk (or S3-compatible object storage, if configured) without ever
+  buffering the whole file in memory, so movie-sized files work fine on a small container.
 
 ## Project layout
 
@@ -59,21 +59,26 @@ Steps:
 1. **Create the project** pointing at this repo (root directory = repo root).
 2. **Link a Postgres add-on** to the project *before the first deploy* — `DATABASE_URL` is
    injected automatically, and `npm start` runs `prisma db push` against it on every boot.
-3. **Set env vars** (Env tab): at minimum `ONESTREAM_PASSCODE`. See `.env.example` for the
-   optional S3 vars.
-4. Deploy. Since there's no `Dockerfile`, Portways just needs `package.json` at the root, which
+3. **Link an Object Storage (S3) add-on** too (Databases tab → create one → link it to this
+   project) — see below. Recommended, not required.
+4. **Set env vars** (Env tab): at minimum `ONESTREAM_PASSCODE`.
+5. Deploy. Since there's no `Dockerfile`, Portways just needs `package.json` at the root, which
    is already the case.
 
-### Storage: local disk vs. S3
+### Storage: local disk vs. object storage
 
 By default, uploads are written to `./data/uploads` inside the container. **That's fine for a
 single always-on container, but it is *not* durable across redeploys** — Portways recreates the
 container's filesystem on every deploy, so a redeploy (e.g. shipping a bug fix) wipes the media
 library.
 
-For anything you want to keep, set the four `S3_*` variables (`.env.example` has the full list)
-to point at an S3-compatible bucket — AWS S3, Cloudflare R2, Backblaze B2, etc. all work. Once
-those are set, uploads and playback stream from there instead, and survive redeploys.
+For anything you want to keep, link a Portways **Object Storage (S3)** add-on to the project —
+it's a self-hosted, S3-compatible bucket, created and linked the same way as the Postgres add-on.
+Linking injects `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
+and `S3_FORCE_PATH_STYLE` automatically — `src/lib/storage.ts` picks these up with zero extra
+config, and uploads/playback switch from disk to the bucket immediately. No external provider
+needed, though any other S3-compatible service (AWS S3, Cloudflare R2, Backblaze B2, ...) works
+too if you'd rather set the same six vars by hand — see `.env.example`.
 
 ### Don't turn on autoscaling
 
