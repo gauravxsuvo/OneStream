@@ -6,6 +6,7 @@ import Busboy from "busboy";
 import { prisma } from "@/lib/prisma";
 import { storeUpload, usingS3 } from "@/lib/storage";
 import { processUpload } from "@/lib/transcode";
+import { AUTH_COOKIE, isAuthenticated } from "@/lib/authHash";
 import type { Media } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -13,6 +14,13 @@ export const runtime = "nodejs";
 type UploadResult = { ok: true; media: Media } | { ok: false; error: string; status: number };
 
 export async function POST(req: NextRequest) {
+  // This route is deliberately excluded from middleware.ts's matcher (see the
+  // comment there) so Next's proxy layer never buffers the upload body. That
+  // means the passcode check has to happen here instead.
+  if (!(await isAuthenticated(req.cookies.get(AUTH_COOKIE)?.value))) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const contentType = req.headers.get("content-type") || "";
   if (!contentType.includes("multipart/form-data")) {
     return NextResponse.json({ error: "Expected multipart/form-data" }, { status: 400 });
