@@ -1,13 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { getSocket } from "@/lib/socketClient";
 import { useDisplayName } from "@/lib/useDisplayName";
 import { Player, type PlayerHandle } from "@/components/Player";
 import { Chat } from "@/components/Chat";
-import { ParticipantList } from "@/components/ParticipantList";
-import { MediaList } from "@/components/MediaList";
+import { LibraryPanel } from "@/components/LibraryPanel";
 import type { ChatMsg, MediaItem, RoomState } from "@/lib/types";
 
 function NamePrompt({ onSubmit }: { onSubmit: (name: string) => void }) {
@@ -34,45 +32,64 @@ function NamePrompt({ onSubmit }: { onSubmit: (name: string) => void }) {
           className="input"
         />
         <button type="submit" disabled={!value.trim()} className="btn-primary">
-          Continue
+          Join OneStream
         </button>
       </form>
     </main>
   );
 }
 
-export function RoomView({ code }: { code: string }) {
+function ConnectionDot({ status }: { status: "connected" | "connecting" | "disconnected" }) {
+  const color =
+    status === "connected" ? "bg-emerald-400" : status === "connecting" ? "bg-amber-400" : "bg-danger";
+  const label = status === "connected" ? "Connected" : status === "connecting" ? "Reconnecting…" : "Disconnected";
+  return (
+    <span className="flex items-center gap-1.5 text-xs text-muted" title={label}>
+      <span className={`h-1.5 w-1.5 rounded-full ${color}`} />
+      <span className="hidden sm:inline">{label}</span>
+    </span>
+  );
+}
+
+export function RoomView() {
   const { name, setName, ready } = useDisplayName();
   const [room, setRoom] = useState<RoomState | null>(null);
-  const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [presence, setPresence] = useState<string[]>([]);
   const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [showPicker, setShowPicker] = useState(false);
-  const [libraryItems, setLibraryItems] = useState<MediaItem[]>([]);
   const [copied, setCopied] = useState(false);
+  const [panelTab, setPanelTab] = useState<"library" | "chat">("library");
+  const [connection, setConnection] = useState<"connected" | "connecting" | "disconnected">("connecting");
+  const [unreadChat, setUnreadChat] = useState(0);
   const playerRef = useRef<PlayerHandle>(null);
+  const panelTabRef = useRef(panelTab);
 
-  // Initial room fetch (also resumes chat history + last known playback state).
+  function switchTab(tab: "library" | "chat") {
+    panelTabRef.current = tab;
+    setPanelTab(tab);
+    if (tab === "chat") setUnreadChat(0);
+  }
+
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/rooms/${code}`).then(async (res) => {
+    fetch("/api/room").then(async (res) => {
       if (cancelled) return;
       if (!res.ok) {
-        setNotFound(true);
+        setLoadError(true);
         return;
       }
       const data = await res.json();
       setRoom(data);
       setMessages(data.messages.map((m: ChatMsg) => ({ sender: m.sender, text: m.text, createdAt: m.createdAt })));
+      switchTab(data.currentMedia ? "chat" : "library");
     });
     return () => {
       cancelled = true;
     };
-  }, [code]);
+  }, []);
 
-  // Socket wiring, once we know who's joining.
   useEffect(() => {
-    if (!ready || !name || notFound || !room) return;
+    if (!ready || !name || loadError || !room) return;
     const socket = getSocket();
 
     function handlePresence(names: string[]) {
@@ -83,6 +100,7 @@ export function RoomView({ code }: { code: string }) {
     }
     function handleChat(msg: ChatMsg) {
       setMessages((prev) => [...prev, msg]);
+      setUnreadChat((n) => (panelTabRef.current === "chat" ? 0 : n + 1));
     }
     function handlePlay({ positionSec, at }: { positionSec: number; at: number }) {
       playerRef.current?.applyPlay(positionSec, at);
@@ -96,6 +114,16 @@ export function RoomView({ code }: { code: string }) {
       playerRef.current?.applySeek(positionSec, at);
       setRoom((r) => (r ? { ...r, positionSec } : r));
     }
+    function onConnect() {
+      setConnection("connected");
+      socket.emit("room:join", { name });
+    }
+    function onDisconnect() {
+      setConnection("disconnected");
+    }
+    function onReconnectAttempt() {
+      setConnection("connecting");
+    }
 
     socket.on("room:presence", handlePresence);
     socket.on("room:state", handleRoomState);
@@ -103,8 +131,11 @@ export function RoomView({ code }: { code: string }) {
     socket.on("player:play", handlePlay);
     socket.on("player:pause", handlePause);
     socket.on("player:seek", handleSeek);
+    socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
+    socket.io.on("reconnect_attempt", onReconnectAttempt);
 
-    socket.emit("room:join", { code, name });
+    if (socket.connected) onConnect();
 
     return () => {
       socket.off("room:presence", handlePresence);
@@ -113,43 +144,35 @@ export function RoomView({ code }: { code: string }) {
       socket.off("player:play", handlePlay);
       socket.off("player:pause", handlePause);
       socket.off("player:seek", handleSeek);
+      socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
+      socket.io.off("reconnect_attempt", onReconnectAttempt);
     };
     // `room` is intentionally excluded — it's updated by these very handlers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, name, notFound, code]);
-
-  async function openPicker() {
-    setShowPicker(true);
-    if (libraryItems.length === 0) {
-      const res = await fetch("/api/media");
-      if (res.ok) setLibraryItems(await res.json());
-    }
-  }
+  }, [ready, name, loadError]);
 
   function selectMedia(media: MediaItem) {
-    getSocket().emit("player:select", { code, mediaId: media.id });
-    setShowPicker(false);
+    getSocket().emit("player:select", { mediaId: media.id });
+    switchTab("chat");
   }
 
   function sendChat(text: string) {
-    getSocket().emit("chat:message", { code, text });
+    getSocket().emit("chat:message", { text });
   }
 
   function copyInvite() {
-    navigator.clipboard?.writeText(window.location.href).then(() => {
+    navigator.clipboard?.writeText(window.location.origin).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
   }
 
-  if (notFound) {
+  if (loadError) {
     return (
       <main className="mx-auto flex min-h-[70dvh] max-w-sm flex-col items-center justify-center gap-3 px-6 text-center">
-        <p className="text-lg font-medium">Room not found</p>
-        <p className="text-sm text-muted">The code “{code}” doesn’t match any active room.</p>
-        <Link href="/" className="btn-secondary mt-2">
-          Back home
-        </Link>
+        <p className="text-lg font-medium">Couldn&apos;t reach OneStream</p>
+        <p className="text-sm text-muted">Check your connection and reload the page.</p>
       </main>
     );
   }
@@ -161,21 +184,19 @@ export function RoomView({ code }: { code: string }) {
   }
 
   return (
-    <main className="mx-auto flex max-w-6xl flex-col gap-6 px-6 py-8">
+    <main className="mx-auto flex max-w-7xl flex-col gap-4 px-3 py-4 sm:gap-6 sm:px-6 sm:py-6 lg:py-8">
       <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold">{room.name}</h1>
-          <p className="text-sm text-muted">
-            Room code <span className="font-mono tracking-widest">{room.code}</span>
-          </p>
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-semibold tracking-tight">OneStream</h1>
+          <ConnectionDot status={connection} />
         </div>
         <button onClick={copyInvite} className="btn-secondary text-xs">
           {copied ? "Copied!" : "Copy invite link"}
         </button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-        <div className="flex flex-col gap-4">
+      <div className="grid gap-4 sm:gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <div className="flex flex-col gap-3">
           <Player
             ref={playerRef}
             media={room.currentMedia}
@@ -184,40 +205,67 @@ export function RoomView({ code }: { code: string }) {
               positionSec: room.positionSec,
               updatedAt: room.updatedAt,
             }}
-            onLocalPlay={(pos) => getSocket().emit("player:play", { code, positionSec: pos })}
-            onLocalPause={(pos) => getSocket().emit("player:pause", { code, positionSec: pos })}
-            onLocalSeek={(pos) => getSocket().emit("player:seek", { code, positionSec: pos })}
+            onLocalPlay={(pos) => getSocket().emit("player:play", { positionSec: pos })}
+            onLocalPause={(pos) => getSocket().emit("player:pause", { positionSec: pos })}
+            onLocalSeek={(pos) => getSocket().emit("player:seek", { positionSec: pos })}
           />
-          <div>
-            <button onClick={openPicker} className="btn-secondary text-sm">
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button onClick={() => switchTab("library")} className="btn-secondary text-sm">
               {room.currentMedia ? "Change what's playing" : "Pick something to play"}
             </button>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-xs text-muted">
+                {presence.length} watching
+              </span>
+              {presence.slice(0, 6).map((n, i) => (
+                <span key={`${n}-${i}`} className="rounded-full bg-surface-hover px-2.5 py-1 text-xs text-foreground">
+                  {n}
+                </span>
+              ))}
+              {presence.length > 6 && (
+                <span className="text-xs text-muted">+{presence.length - 6} more</span>
+              )}
+            </div>
           </div>
-          <ParticipantList names={presence} />
         </div>
 
-        <div className="h-[28rem] lg:h-auto">
-          <Chat messages={messages} onSend={sendChat} />
+        <div className="card flex h-[30rem] flex-col overflow-hidden sm:h-[34rem] lg:h-[calc(100vh-11rem)] lg:min-h-[28rem]">
+          <div className="flex border-b border-border">
+            <button
+              onClick={() => switchTab("library")}
+              className={`flex-1 px-4 py-2.5 text-sm font-medium transition ${
+                panelTab === "library" ? "text-foreground" : "text-muted hover:text-foreground"
+              }`}
+            >
+              Library
+              {panelTab === "library" && <span className="mt-1.5 block h-0.5 rounded-full bg-accent" />}
+            </button>
+            <button
+              onClick={() => switchTab("chat")}
+              className={`relative flex-1 px-4 py-2.5 text-sm font-medium transition ${
+                panelTab === "chat" ? "text-foreground" : "text-muted hover:text-foreground"
+              }`}
+            >
+              Chat
+              {unreadChat > 0 && panelTab !== "chat" && (
+                <span className="absolute right-4 top-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold text-accent-foreground">
+                  {unreadChat}
+                </span>
+              )}
+              {panelTab === "chat" && <span className="mt-1.5 block h-0.5 rounded-full bg-accent" />}
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 p-3">
+            {panelTab === "library" ? (
+              <LibraryPanel onSelect={selectMedia} currentMediaId={room.currentMedia?.id} />
+            ) : (
+              <Chat messages={messages} onSend={sendChat} />
+            )}
+          </div>
         </div>
       </div>
-
-      {showPicker && (
-        <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/60 p-4">
-          <div className="card max-h-[80vh] w-full max-w-lg overflow-y-auto p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-medium">Choose from the library</h2>
-              <button onClick={() => setShowPicker(false)} className="btn-ghost px-2 py-1 text-xs">
-                Close
-              </button>
-            </div>
-            <MediaList
-              items={libraryItems}
-              onSelect={selectMedia}
-              emptyLabel="Nothing uploaded yet — add media from the Library page first."
-            />
-          </div>
-        </div>
-      )}
     </main>
   );
 }

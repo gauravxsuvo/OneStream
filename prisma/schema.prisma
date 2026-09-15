@@ -17,17 +17,52 @@ enum StorageKind {
   S3
 }
 
+enum RenditionStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+}
+
 model Media {
-  id          String      @id @default(cuid())
-  title       String
-  type        MediaType
-  storageKey  String
-  storageKind StorageKind @default(LOCAL)
-  mimeType    String
-  size        Int
-  uploadedBy  String
-  createdAt   DateTime    @default(now())
-  rooms       Room[]
+  id            String           @id @default(cuid())
+  title         String
+  type          MediaType
+  storageKey    String
+  storageKind   StorageKind      @default(LOCAL)
+  mimeType      String
+  size          Int
+  uploadedBy    String
+  durationSec   Float?
+  width         Int?
+  height        Int?
+  thumbnailKey  String?
+  thumbnailKind StorageKind?
+  createdAt     DateTime         @default(now())
+  rooms         Room[]
+  renditions    MediaRendition[]
+}
+
+/// One transcoded variant of a Media item (a resolution tier for video, a bitrate
+/// tier for audio). Generated in the background after upload; the original upload
+/// is always playable immediately regardless of rendition status.
+model MediaRendition {
+  id          String          @id @default(cuid())
+  mediaId     String
+  media       Media           @relation(fields: [mediaId], references: [id], onDelete: Cascade)
+  label       String // "144p" | "240p" | ... | "1080p" | "128kbps" | "256kbps" | "320kbps"
+  status      RenditionStatus @default(PENDING)
+  storageKey  String?
+  storageKind StorageKind     @default(LOCAL)
+  mimeType    String?
+  size        Int?
+  height      Int?
+  bitrateKbps Int?
+  error       String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([mediaId, label])
 }
 
 model Room {

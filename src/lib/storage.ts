@@ -41,6 +41,12 @@ function ensureDataDir() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+/** Local keys can contain "/" (renditions/<id>/720p.mp4, thumbnails/<id>.jpg),
+ * so the destination's parent directory isn't guaranteed to exist yet. */
+function ensureParentDir(filePath: string) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
 /** Streams the upload straight to its destination (disk or S3) without buffering it in memory. */
 export async function storeUpload(
   key: string,
@@ -58,7 +64,9 @@ export async function storeUpload(
   }
 
   ensureDataDir();
-  const dest = fs.createWriteStream(path.join(/* turbopackIgnore: true */ DATA_DIR, key));
+  const destPath = path.join(/* turbopackIgnore: true */ DATA_DIR, key);
+  ensureParentDir(destPath);
+  const dest = fs.createWriteStream(destPath);
   let size = 0;
   stream.on("data", (chunk: Buffer) => {
     size += chunk.length;
@@ -70,6 +78,37 @@ export async function storeUpload(
     stream.on("error", reject);
   });
   return size;
+}
+
+/** Uploads a file already sitting on local disk (e.g. an ffmpeg output) to the
+ * configured destination (S3 or the local data dir), then leaves the source
+ * file for the caller to clean up. */
+export async function storeUploadFromFile(
+  key: string,
+  filePath: string,
+  contentType: string
+): Promise<number> {
+  const stat = fs.statSync(filePath);
+
+  if (usingS3) {
+    const upload = new Upload({
+      client: getS3(),
+      params: {
+        Bucket: bucket(),
+        Key: key,
+        Body: fs.createReadStream(filePath),
+        ContentType: contentType,
+      },
+    });
+    await upload.done();
+    return stat.size;
+  }
+
+  ensureDataDir();
+  const destPath = path.join(/* turbopackIgnore: true */ DATA_DIR, key);
+  ensureParentDir(destPath);
+  await fs.promises.copyFile(filePath, destPath);
+  return stat.size;
 }
 
 export async function deleteUpload(key: string): Promise<void> {

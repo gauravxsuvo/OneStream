@@ -8,16 +8,18 @@ const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT || "3000", 10);
 const socketPath = "/socket.io";
 
+// OneStream is single-room: every passcode holder shares one room, so there's
+// no create/join flow. Mirrors ROOM_CODE in src/lib/room.ts — keep both in
+// sync if this ever changes (server.js can't import the TS module directly).
+const ROOM_CODE = "MAIN";
+
 const app = next({ dev });
 const handle = app.getRequestHandler();
 const prisma = new PrismaClient();
 
-// socketId -> { code, name }, kept in-memory since this app runs as a single container.
+// socketId -> displayName, kept in-memory since this app runs as a single container.
 const members = new Map();
-
-function roomChannel(code) {
-  return `room:${code}`;
-}
+const ROOM_CHANNEL = `room:${ROOM_CODE}`;
 
 function sha256Hex(input) {
   return crypto.createHash("sha256").update(input).digest("hex");
@@ -34,13 +36,19 @@ function parseCookie(header, name) {
   return undefined;
 }
 
-function presenceFor(code) {
-  const names = [];
-  for (const info of members.values()) {
-    if (info.code === code) names.push(info.name);
-  }
-  return names;
+function presence() {
+  return Array.from(members.values());
 }
+
+// Kept alongside the room queries below so the currentMedia payload always
+// matches the MediaItem shape the client expects (renditions included).
+const CURRENT_MEDIA_INCLUDE = {
+  include: {
+    renditions: {
+      select: { label: true, status: true, height: true, bitrateKbps: true, size: true },
+    },
+  },
+};
 
 function serializeRoom(room) {
   return {
@@ -53,15 +61,22 @@ function serializeRoom(room) {
   };
 }
 
-async function persistState(code, patch) {
+async function persistState(patch) {
   try {
-    await prisma.room.update({ where: { code }, data: { ...patch, updatedAt: new Date() } });
+    await prisma.room.update({ where: { code: ROOM_CODE }, data: { ...patch, updatedAt: new Date() } });
   } catch (err) {
-    console.error(`[onestream] failed to persist state for room ${code}:`, err.message);
+    console.error(`[onestream] failed to persist room state:`, err.message);
   }
 }
 
-app.prepare().then(() => {
+app.prepare().then(async () => {
+  // Make sure the single room row exists before anyone connects.
+  await prisma.room.upsert({
+    where: { code: ROOM_CODE },
+    update: {},
+    create: { code: ROOM_CODE, name: "OneStream" },
+  });
+
   const httpServer = createServer((req, res) => {
     // Let socket.io's own request listener (registered below) handle its own path;
     // everything else goes through Next.
@@ -80,67 +95,67 @@ app.prepare().then(() => {
   });
 
   io.on("connection", (socket) => {
-    socket.on("room:join", async ({ code, name }) => {
-      if (!code) return;
+    socket.on("room:join", async ({ name }) => {
       const displayName = String(name || "Guest").slice(0, 40);
-      members.set(socket.id, { code, name: displayName });
-      socket.join(roomChannel(code));
-      io.to(roomChannel(code)).emit("room:presence", presenceFor(code));
+      members.set(socket.id, displayName);
+      socket.join(ROOM_CHANNEL);
+      io.to(ROOM_CHANNEL).emit("room:presence", presence());
 
       const room = await prisma.room.findUnique({
-        where: { code },
-        include: { currentMedia: true },
+        where: { code: ROOM_CODE },
+        include: { currentMedia: CURRENT_MEDIA_INCLUDE },
       });
       if (room) socket.emit("room:state", serializeRoom(room));
     });
 
-    socket.on("player:play", async ({ code, positionSec }) => {
-      if (!code) return;
-      await persistState(code, { isPlaying: true, positionSec });
-      socket.to(roomChannel(code)).emit("player:play", { positionSec, at: Date.now() });
+    socket.on("player:play", async ({ positionSec }) => {
+      await persistState({ isPlaying: true, positionSec });
+      socket.to(ROOM_CHANNEL).emit("player:play", { positionSec, at: Date.now() });
     });
 
-    socket.on("player:pause", async ({ code, positionSec }) => {
-      if (!code) return;
-      await persistState(code, { isPlaying: false, positionSec });
-      socket.to(roomChannel(code)).emit("player:pause", { positionSec });
+    socket.on("player:pause", async ({ positionSec }) => {
+      await persistState({ isPlaying: false, positionSec });
+      socket.to(ROOM_CHANNEL).emit("player:pause", { positionSec });
     });
 
-    socket.on("player:seek", async ({ code, positionSec }) => {
-      if (!code) return;
-      await persistState(code, { positionSec });
-      socket.to(roomChannel(code)).emit("player:seek", { positionSec, at: Date.now() });
+    socket.on("player:seek", async ({ positionSec }) => {
+      await persistState({ positionSec });
+      socket.to(ROOM_CHANNEL).emit("player:seek", { positionSec, at: Date.now() });
     });
 
-    socket.on("player:select", async ({ code, mediaId }) => {
-      if (!code) return;
+    socket.on("player:select", async ({ mediaId }) => {
       const room = await prisma.room.update({
-        where: { code },
+        where: { code: ROOM_CODE },
         data: { currentMediaId: mediaId, isPlaying: false, positionSec: 0 },
-        include: { currentMedia: true },
+        include: { currentMedia: CURRENT_MEDIA_INCLUDE },
       });
-      io.to(roomChannel(code)).emit("room:state", serializeRoom(room));
+      io.to(ROOM_CHANNEL).emit("room:state", serializeRoom(room));
     });
 
-    socket.on("chat:message", async ({ code, text }) => {
-      if (!code || !text || !text.trim()) return;
-      const info = members.get(socket.id);
-      const room = await prisma.room.findUnique({ where: { code } });
+    socket.on("chat:message", async ({ text }) => {
+      if (!text || !text.trim()) return;
+      const name = members.get(socket.id) || "Guest";
+      const room = await prisma.room.findUnique({ where: { code: ROOM_CODE } });
       if (!room) return;
       const msg = await prisma.chatMessage.create({
-        data: { roomId: room.id, sender: info?.name || "Guest", text: text.slice(0, 500) },
+        data: { roomId: room.id, sender: name, text: text.slice(0, 500) },
       });
-      io.to(roomChannel(code)).emit("chat:message", {
+      io.to(ROOM_CHANNEL).emit("chat:message", {
         sender: msg.sender,
         text: msg.text,
         createdAt: msg.createdAt,
       });
     });
 
+    // Round-trip ping for the "stats for nerds" overlay — just echoes the
+    // client's timestamp straight back so it can compute RTT/2.
+    socket.on("ping:rtt", (sentAt) => {
+      socket.emit("pong:rtt", sentAt);
+    });
+
     socket.on("disconnect", () => {
-      const info = members.get(socket.id);
       members.delete(socket.id);
-      if (info) io.to(roomChannel(info.code)).emit("room:presence", presenceFor(info.code));
+      io.to(ROOM_CHANNEL).emit("room:presence", presence());
     });
   });
 

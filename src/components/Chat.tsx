@@ -20,9 +20,9 @@ export function Chat({ messages, onSend }: { messages: ChatMsg[]; onSend: (text:
   }
 
   return (
-    <div className="card flex h-full flex-col">
-      <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto p-4">
-        {messages.length === 0 && <p className="text-sm text-muted">No messages yet — say hi.</p>}
+    <div className="flex h-full flex-col">
+      <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto px-1 py-2">
+        {messages.length === 0 && <p className="text-sm text-muted">No messages yet, say hi.</p>}
         {messages.map((m, i) => (
           <div key={i} className="text-sm">
             <span className="font-medium text-accent">{m.sender}</span>{" "}
@@ -30,7 +30,7 @@ export function Chat({ messages, onSend }: { messages: ChatMsg[]; onSend: (text:
           </div>
         ))}
       </div>
-      <form onSubmit={submit} className="flex gap-2 border-t border-border p-3">
+      <form onSubmit={submit} className="flex gap-2 border-t border-border pt-3">
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}

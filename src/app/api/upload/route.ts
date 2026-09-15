@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import Busboy from "busboy";
 import { prisma } from "@/lib/prisma";
 import { storeUpload, usingS3 } from "@/lib/storage";
+import { processUpload } from "@/lib/transcode";
 import type { Media } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -93,5 +94,12 @@ export async function POST(req: NextRequest) {
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
-  return NextResponse.json(result.media, { status: 201 });
+  // Probing + transcoding happens in the background — the original file is
+  // already playable, so the upload response doesn't wait on any of it.
+  void processUpload(result.media.id).catch((err) =>
+    console.error(`[onestream] processUpload failed for ${result.media.id}:`, err)
+  );
+  // No renditions exist yet at creation time — include the empty array so the
+  // response matches the MediaItem shape the client expects everywhere else.
+  return NextResponse.json({ ...result.media, renditions: [] }, { status: 201 });
 }
