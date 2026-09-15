@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { Readable } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
 import {
   DeleteObjectCommand,
   GetObjectCommand,
-  HeadObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
@@ -54,13 +53,28 @@ export async function storeUpload(
   contentType: string
 ): Promise<number> {
   if (usingS3) {
+    // Deliberately not a follow-up HeadObjectCommand on the same client:
+    // reusing that connection for a HEAD immediately after a multipart
+    // Upload completes reliably 403s behind Portways' Cloudflare/Traefik
+    // routing (confirmed live -- a fresh client's HeadObjectCommand alone
+    // always succeeds, so this is a keep-alive connection-reuse desync in
+    // the proxy chain, not a permissions issue). Counting bytes as they
+    // pass through mirrors what the local-disk branch below already does
+    // and needs no second round trip at all.
+    let size = 0;
+    const counter = new PassThrough({
+      transform(chunk: Buffer, _enc, callback) {
+        size += chunk.length;
+        callback(null, chunk);
+      },
+    });
+    stream.pipe(counter);
     const upload = new Upload({
       client: getS3(),
-      params: { Bucket: bucket(), Key: key, Body: stream, ContentType: contentType },
+      params: { Bucket: bucket(), Key: key, Body: counter, ContentType: contentType },
     });
     await upload.done();
-    const head = await getS3().send(new HeadObjectCommand({ Bucket: bucket(), Key: key }));
-    return head.ContentLength ?? 0;
+    return size;
   }
 
   ensureDataDir();
